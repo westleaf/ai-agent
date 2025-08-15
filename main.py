@@ -3,10 +3,9 @@ import sys
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from functions.get_files_info import schema_get_files_info
+from call_function import call_function, available_functions
 
 from prompts import system_prompt
-from call_function import available_functions
 
 def main():
     load_dotenv()
@@ -33,8 +32,14 @@ def main():
     messages = [
         types.Content(role="user", parts=[types.Part(text=user_prompt)])
     ]
-    generate_content(client, messages, verbose)
-
+    for i in range(0,20):
+      try:
+          response = generate_content(client, messages, verbose)
+          if response and response.text:
+              print(response.text)
+              break
+      except Exception as e:
+          print(f"Caught exception: {e}")
 
 def generate_content(client, messages, verbose):
     response = client.models.generate_content(
@@ -45,18 +50,39 @@ def generate_content(client, messages, verbose):
             tools=[available_functions]
             )
     )
+
+    for candidate in response.candidates:
+        model_message = types.Content(
+            role="model",
+            parts=candidate.content.parts
+        )
+        messages.append(model_message)
+
     if not response.function_calls:
-        print("Response:")
-        print(response.text)
-        
-    if response.function_calls:
-      for function in response.function_calls:
-          print(f"Calling function: {function.name}({function.args})")
+        return response
 
-    if verbose:
-        print(f"Prompt tokens: {response.usage_metadata.prompt_token_count}")
-        print(f"Response tokens: {response.usage_metadata.candidates_token_count}")
+    function_responses = []
+    for function_call_part in response.function_calls:
+        function_call_result = call_function(function_call_part, verbose)
+        if (
+            not function_call_result.parts
+            or not function_call_result.parts[0].function_response
+        ):
+            raise Exception("empty function call result")
+        if verbose:
+            print(f"-> {function_call_result.parts[0].function_response.response}")
+        function_responses.append(function_call_result.parts[0])
 
+    user_message = types.Content(
+    role="user",
+    parts=function_responses
+    )
+    messages.append(user_message)
+
+    if not function_responses:
+        raise Exception("no function responses generated, exiting.")
+
+    return None
 
 if __name__ == "__main__":
     main()
